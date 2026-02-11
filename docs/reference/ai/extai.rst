@@ -351,6 +351,9 @@ VoyageAI (`documentation <https://docs.voyageai.com/docs/embeddings>`__)
 
 Current generation models:
 
+* ``voyage-4``
+* ``voyage-4-lite``
+* ``voyage-4-large``
 * ``voyage-3-large``
 * ``voyage-3.5``
 * ``voyage-3.5-lite``

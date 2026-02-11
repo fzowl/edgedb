@@ -584,6 +584,57 @@ CREATE EXTENSION PACKAGE ai VERSION '1.0' {
     };
 
     # VoyageAI models
+    create abstract type ext::ai::Voyage4EmbedModel
+        extending ext::ai::EmbeddingModel
+    {
+        alter annotation
+            ext::ai::model_name := "voyage-4";
+        alter annotation
+            ext::ai::model_provider := "builtin::voyageai";
+        alter annotation
+            ext::ai::embedding_model_max_input_tokens := "32000";
+        alter annotation
+            ext::ai::embedding_model_max_batch_tokens := "320000";
+        alter annotation
+            ext::ai::embedding_model_max_output_dimensions := "1024";
+        alter annotation
+            ext::ai::embedding_model_supports_shortening := "true";
+    };
+
+    create abstract type ext::ai::Voyage4LiteEmbedModel
+        extending ext::ai::EmbeddingModel
+    {
+        alter annotation
+            ext::ai::model_name := "voyage-4-lite";
+        alter annotation
+            ext::ai::model_provider := "builtin::voyageai";
+        alter annotation
+            ext::ai::embedding_model_max_input_tokens := "32000";
+        alter annotation
+            ext::ai::embedding_model_max_batch_tokens := "1000000";
+        alter annotation
+            ext::ai::embedding_model_max_output_dimensions := "1024";
+        alter annotation
+            ext::ai::embedding_model_supports_shortening := "true";
+    };
+
+    create abstract type ext::ai::Voyage4LargeEmbedModel
+        extending ext::ai::EmbeddingModel
+    {
+        alter annotation
+            ext::ai::model_name := "voyage-4-large";
+        alter annotation
+            ext::ai::model_provider := "builtin::voyageai";
+        alter annotation
+            ext::ai::embedding_model_max_input_tokens := "32000";
+        alter annotation
+            ext::ai::embedding_model_max_batch_tokens := "120000";
+        alter annotation
+            ext::ai::embedding_model_max_output_dimensions := "1024";
+        alter annotation
+            ext::ai::embedding_model_supports_shortening := "true";
+    };
+
     create abstract type ext::ai::Voyage3LargeEmbedModel
         extending ext::ai::EmbeddingModel
     {
