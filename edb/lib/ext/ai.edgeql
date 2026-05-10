@@ -638,6 +638,8 @@ CREATE EXTENSION PACKAGE ai VERSION '1.0' {
     create abstract type ext::ai::Voyage3LargeEmbedModel
         extending ext::ai::EmbeddingModel
     {
+        create annotation std::deprecated :=
+        "This model is noted as a legacy model in the VoyageAI docs.";
         alter annotation
             ext::ai::model_name := "voyage-3-large";
         alter annotation
@@ -655,6 +657,8 @@ CREATE EXTENSION PACKAGE ai VERSION '1.0' {
     create abstract type ext::ai::VoyageCode3EmbedModel
         extending ext::ai::EmbeddingModel
     {
+        create annotation std::deprecated :=
+        "This model is noted as a legacy model in the VoyageAI docs.";
         alter annotation
             ext::ai::model_name := "voyage-code-3";
         alter annotation
@@ -800,7 +804,7 @@ CREATE EXTENSION PACKAGE ai VERSION '1.0' {
         alter annotation
             ext::ai::embedding_model_max_batch_tokens := "320000";
         alter annotation
-            ext::ai::embedding_model_max_output_dimensions := "1024";
+            ext::ai::embedding_model_max_output_dimensions := "2048";
         alter annotation
             ext::ai::embedding_model_supports_shortening := "true";
     };
