@@ -242,6 +242,43 @@ class OllamaTokenizer(Tokenizer):
         return ''.join(chr(c) for c in tokens)
 
 
+class VoyageAITokenizer(Tokenizer):
+
+    """
+    Counts characters as a stand-in for tokens.
+
+    VoyageAI (by MongoDB) publishes real tokenizers on the Hugging Face Hub,
+    but pulling them in would add a heavyweight dependency and a network
+    download at runtime. Since the number of tokens for a given text is always
+    less than or equal to the number of characters, counting characters is a
+    conservative proxy: it never lets a batch exceed the real token budget and
+    never leaves an over-long input un-truncated. It can under-fill batches for
+    text that tokenizes densely, which is the same trade-off OllamaTokenizer
+    makes.
+    """
+
+    _instances: dict[str, VoyageAITokenizer] = {}
+
+    @classmethod
+    def for_model(cls, model_name: str) -> VoyageAITokenizer:
+        if model_name in cls._instances:
+            return cls._instances[model_name]
+
+        tokenizer = VoyageAITokenizer()
+        cls._instances[model_name] = tokenizer
+
+        return tokenizer
+
+    def encode(self, text: str) -> list[int]:
+        return [ord(c) for c in text]
+
+    def encode_padding(self) -> int:
+        return 0
+
+    def decode(self, tokens: list[int]) -> str:
+        return ''.join(chr(c) for c in tokens)
+
+
 class TestTokenizer(Tokenizer):
 
     _instances: dict[str, TestTokenizer] = {}
@@ -277,6 +314,8 @@ def get_model_tokenizer(
         return MistralTokenizer.for_model(model_name)
     if provider_name == 'builtin::ollama':
         return OllamaTokenizer.for_model(model_name)
+    elif provider_name == 'builtin::voyageai':
+        return VoyageAITokenizer.for_model(model_name)
     elif provider_name == 'custom::test':
         return TestTokenizer.for_model(model_name)
     else:
@@ -1385,9 +1424,12 @@ async def _generate_voyageai_embeddings(
         }
         endpoint = "/contextualizedembeddings"
     else:
-        # Standard embeddings
+        # Standard embeddings. input_type="document" is what VoyageAI (by
+        # MongoDB) recommends for the indexing side of retrieval; it matches
+        # the contextualized path above and improves retrieval quality.
         params = {
             "input": inputs,
+            "input_type": "document",
             "model": model_name,
         }
         endpoint = "/embeddings"

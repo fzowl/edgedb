@@ -592,6 +592,8 @@ CREATE EXTENSION PACKAGE ai VERSION '1.0' {
         alter annotation
             ext::ai::model_provider := "builtin::voyageai";
         alter annotation
+            ext::ai::embedding_model_max_batch_size := "1000";
+        alter annotation
             ext::ai::embedding_model_max_input_tokens := "32000";
         alter annotation
             ext::ai::embedding_model_max_batch_tokens := "320000";
@@ -608,6 +610,8 @@ CREATE EXTENSION PACKAGE ai VERSION '1.0' {
             ext::ai::model_name := "voyage-4-lite";
         alter annotation
             ext::ai::model_provider := "builtin::voyageai";
+        alter annotation
+            ext::ai::embedding_model_max_batch_size := "1000";
         alter annotation
             ext::ai::embedding_model_max_input_tokens := "32000";
         alter annotation
@@ -626,6 +630,8 @@ CREATE EXTENSION PACKAGE ai VERSION '1.0' {
         alter annotation
             ext::ai::model_provider := "builtin::voyageai";
         alter annotation
+            ext::ai::embedding_model_max_batch_size := "1000";
+        alter annotation
             ext::ai::embedding_model_max_input_tokens := "32000";
         alter annotation
             ext::ai::embedding_model_max_batch_tokens := "120000";
@@ -642,6 +648,8 @@ CREATE EXTENSION PACKAGE ai VERSION '1.0' {
             ext::ai::model_name := "voyage-code-4";
         alter annotation
             ext::ai::model_provider := "builtin::voyageai";
+        alter annotation
+            ext::ai::embedding_model_max_batch_size := "1000";
         alter annotation
             ext::ai::embedding_model_max_input_tokens := "32000";
         alter annotation
@@ -662,6 +670,8 @@ CREATE EXTENSION PACKAGE ai VERSION '1.0' {
         alter annotation
             ext::ai::model_provider := "builtin::voyageai";
         alter annotation
+            ext::ai::embedding_model_max_batch_size := "1000";
+        alter annotation
             ext::ai::embedding_model_max_input_tokens := "32000";
         alter annotation
             ext::ai::embedding_model_max_batch_tokens := "32000";
@@ -680,6 +690,8 @@ CREATE EXTENSION PACKAGE ai VERSION '1.0' {
             ext::ai::model_name := "voyage-code-3";
         alter annotation
             ext::ai::model_provider := "builtin::voyageai";
+        alter annotation
+            ext::ai::embedding_model_max_batch_size := "1000";
         alter annotation
             ext::ai::embedding_model_max_input_tokens := "32000";
         alter annotation
@@ -700,6 +712,8 @@ CREATE EXTENSION PACKAGE ai VERSION '1.0' {
         alter annotation
             ext::ai::model_provider := "builtin::voyageai";
         alter annotation
+            ext::ai::embedding_model_max_batch_size := "1000";
+        alter annotation
             ext::ai::embedding_model_max_input_tokens := "32000";
         alter annotation
             ext::ai::embedding_model_max_batch_tokens := "32000";
@@ -718,6 +732,8 @@ CREATE EXTENSION PACKAGE ai VERSION '1.0' {
             ext::ai::model_name := "voyage-3.5-lite";
         alter annotation
             ext::ai::model_provider := "builtin::voyageai";
+        alter annotation
+            ext::ai::embedding_model_max_batch_size := "1000";
         alter annotation
             ext::ai::embedding_model_max_input_tokens := "32000";
         alter annotation
@@ -738,6 +754,8 @@ CREATE EXTENSION PACKAGE ai VERSION '1.0' {
         alter annotation
             ext::ai::model_provider := "builtin::voyageai";
         alter annotation
+            ext::ai::embedding_model_max_batch_size := "1000";
+        alter annotation
             ext::ai::embedding_model_max_input_tokens := "32000";
         alter annotation
             ext::ai::embedding_model_max_batch_tokens := "32000";
@@ -755,6 +773,8 @@ CREATE EXTENSION PACKAGE ai VERSION '1.0' {
         alter annotation
             ext::ai::model_provider := "builtin::voyageai";
         alter annotation
+            ext::ai::embedding_model_max_batch_size := "1000";
+        alter annotation
             ext::ai::embedding_model_max_input_tokens := "32000";
         alter annotation
             ext::ai::embedding_model_max_batch_tokens := "32000";
@@ -770,6 +790,8 @@ CREATE EXTENSION PACKAGE ai VERSION '1.0' {
         alter annotation
             ext::ai::model_provider := "builtin::voyageai";
         alter annotation
+            ext::ai::embedding_model_max_batch_size := "1000";
+        alter annotation
             ext::ai::embedding_model_max_input_tokens := "32000";
         alter annotation
             ext::ai::embedding_model_max_batch_tokens := "32000";
@@ -784,6 +806,8 @@ CREATE EXTENSION PACKAGE ai VERSION '1.0' {
             ext::ai::model_name := "voyage-law-2";
         alter annotation
             ext::ai::model_provider := "builtin::voyageai";
+        alter annotation
+            ext::ai::embedding_model_max_batch_size := "1000";
         alter annotation
             ext::ai::embedding_model_max_input_tokens := "16000";
         alter annotation
@@ -802,6 +826,8 @@ CREATE EXTENSION PACKAGE ai VERSION '1.0' {
         alter annotation
             ext::ai::model_provider := "builtin::voyageai";
         alter annotation
+            ext::ai::embedding_model_max_batch_size := "1000";
+        alter annotation
             ext::ai::embedding_model_max_input_tokens := "16000";
         alter annotation
             ext::ai::embedding_model_max_batch_tokens := "16000";
@@ -816,6 +842,8 @@ CREATE EXTENSION PACKAGE ai VERSION '1.0' {
             ext::ai::model_name := "voyage-context-4";
         alter annotation
             ext::ai::model_provider := "builtin::voyageai";
+        alter annotation
+            ext::ai::embedding_model_max_batch_size := "1000";
         alter annotation
             ext::ai::embedding_model_max_input_tokens := "32000";
         alter annotation
@@ -835,6 +863,8 @@ CREATE EXTENSION PACKAGE ai VERSION '1.0' {
             ext::ai::model_name := "voyage-context-3";
         alter annotation
             ext::ai::model_provider := "builtin::voyageai";
+        alter annotation
+            ext::ai::embedding_model_max_batch_size := "1000";
         alter annotation
             ext::ai::embedding_model_max_input_tokens := "32000";
         alter annotation

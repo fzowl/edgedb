@@ -1557,7 +1557,12 @@ class TestExtAIVoyage(unittest.IsolatedAsyncioTestCase):
         endpoint, params = client.calls[0]
         self.assertEqual(endpoint, '/embeddings')
         self.assertEqual(
-            params, {'input': ['hello', 'world'], 'model': 'voyage-4'}
+            params,
+            {
+                'input': ['hello', 'world'],
+                'input_type': 'document',
+                'model': 'voyage-4',
+            },
         )
 
         self.assertEqual(
@@ -1644,3 +1649,49 @@ class TestExtAIVoyage(unittest.IsolatedAsyncioTestCase):
         self.assertIs(result.provider_cfg, provider)
         self.assertIsInstance(result.data, ai_ext.rs.Error)
         self.assertTrue(result.data.retry)
+
+    def test_ext_ai_voyage_tokenizer_registered(self):
+        # Without a tokenizer, batch_texts sends every pending row in a single
+        # request with no per-input length enforcement. The VoyageAI provider
+        # must resolve to VoyageAITokenizer so lengths and batches are honored.
+        tokenizer = ai_ext.get_model_tokenizer(
+            'builtin::voyageai', 'voyage-4'
+        )
+        self.assertIsInstance(tokenizer, ai_ext.VoyageAITokenizer)
+
+    def test_ext_ai_voyage_batching_and_truncation(self):
+        tokenizer = ai_ext.get_model_tokenizer(
+            'builtin::voyageai', 'voyage-4'
+        )
+
+        texts = [
+            ('aa', True),        # 0: fits
+            ('bb', True),        # 1: fits
+            ('cc', True),        # 2: fits
+            ('abcdefgh', True),  # 3: over max_input_tokens, truncatable
+            ('longlong', False),  # 4: over max_input_tokens, not truncatable
+        ]
+
+        batches, excluded = ai_ext.batch_texts(
+            texts,
+            tokenizer,
+            # VoyageAITokenizer counts characters, so token == character here.
+            max_input_tokens=5,
+            max_batch_tokens=1000,
+            max_batch_size=2,
+        )
+
+        # The un-truncatable over-long input is dropped from embedding.
+        self.assertEqual(excluded, [4])
+
+        # Remaining 4 inputs are split into batches of at most max_batch_size.
+        self.assertTrue(all(len(b.entries) <= 2 for b in batches))
+        self.assertEqual(sum(len(b.entries) for b in batches), 4)
+
+        # The over-long truncatable input is truncated to max_input_tokens.
+        by_index = {
+            entry.input_index: entry.input_text
+            for b in batches for entry in b.entries
+        }
+        self.assertEqual(by_index[3], 'abcde')
+        self.assertNotIn(4, by_index)
