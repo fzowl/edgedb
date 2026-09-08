@@ -596,7 +596,7 @@ CREATE EXTENSION PACKAGE ai VERSION '1.0' {
         alter annotation
             ext::ai::embedding_model_max_batch_tokens := "320000";
         alter annotation
-            ext::ai::embedding_model_max_output_dimensions := "1024";
+            ext::ai::embedding_model_max_output_dimensions := "2048";
         alter annotation
             ext::ai::embedding_model_supports_shortening := "true";
     };
@@ -613,7 +613,7 @@ CREATE EXTENSION PACKAGE ai VERSION '1.0' {
         alter annotation
             ext::ai::embedding_model_max_batch_tokens := "1000000";
         alter annotation
-            ext::ai::embedding_model_max_output_dimensions := "1024";
+            ext::ai::embedding_model_max_output_dimensions := "2048";
         alter annotation
             ext::ai::embedding_model_supports_shortening := "true";
     };
@@ -630,7 +630,7 @@ CREATE EXTENSION PACKAGE ai VERSION '1.0' {
         alter annotation
             ext::ai::embedding_model_max_batch_tokens := "120000";
         alter annotation
-            ext::ai::embedding_model_max_output_dimensions := "1024";
+            ext::ai::embedding_model_max_output_dimensions := "2048";
         alter annotation
             ext::ai::embedding_model_supports_shortening := "true";
     };
@@ -647,7 +647,7 @@ CREATE EXTENSION PACKAGE ai VERSION '1.0' {
         alter annotation
             ext::ai::embedding_model_max_batch_tokens := "320000";
         alter annotation
-            ext::ai::embedding_model_max_output_dimensions := "1024";
+            ext::ai::embedding_model_max_output_dimensions := "2048";
         alter annotation
             ext::ai::embedding_model_supports_shortening := "true";
     };

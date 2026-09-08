@@ -1269,7 +1269,7 @@ async def _generate_embeddings(
             provider, model_name, inputs, shortening, user, http_client
         )
     elif provider.api_style == ApiStyle.VoyageAI:
-        return await _generate_voyageai_embeddings(
+        result = await _generate_voyageai_embeddings(
             provider, model_name, inputs, shortening, http_client
         )
     elif provider.api_style == ApiStyle.Ollama:
@@ -1357,8 +1357,10 @@ async def _generate_voyageai_embeddings(
         base_url=provider.api_url,
     )
 
-    # Check if this is a contextualized embedding model
-    is_contextualized = "context" in model_name
+    # Contextualized-embedding models are the voyage-context-* family and use
+    # a different endpoint/payload shape. Match the documented name prefix
+    # rather than a loose substring so unrelated future models are not caught.
+    is_contextualized = model_name.startswith("voyage-context")
 
     if is_contextualized:
         # Contextualized chunk embeddings API (voyage-context-* models).
@@ -1413,21 +1415,29 @@ async def _generate_voyageai_embeddings(
             ),
         )
 
+    # Voyage exposes the same x-ratelimit-* headers as OpenAI, so the shared
+    # reader lets the scheduler do rate-limit-aware backoff; it degrades to
+    # None values when the headers are absent.
+    limits = _read_openai_limits(result)
+
     # For contextualized embeddings, we need to flatten the response
     if is_contextualized and not error:
-        import json
         response_data = json.loads(result.bytes())
         # Flatten the nested structure: data[doc][chunk] -> data[chunk]
         flattened_data = []
-        for doc_idx, doc in enumerate(response_data.get("data", [])):
+        for doc in response_data.get("data", []):
             for chunk in doc.get("data", []):
                 flattened_data.append(chunk)
         response_data["data"] = flattened_data
         flattened_bytes = json.dumps(response_data).encode()
-        return EmbeddingsResult(data=EmbeddingsData(flattened_bytes))
+        return EmbeddingsResult(
+            data=EmbeddingsData(flattened_bytes),
+            limits=limits,
+        )
 
     return EmbeddingsResult(
         data=(error if error else EmbeddingsData(result.bytes())),
+        limits=limits,
     )
 
 
