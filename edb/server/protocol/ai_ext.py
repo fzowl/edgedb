@@ -1361,7 +1361,21 @@ async def _generate_voyageai_embeddings(
     is_contextualized = "context" in model_name
 
     if is_contextualized:
-        # For contextualized embeddings, treat each input as a single-chunk document
+        # Contextualized chunk embeddings API (voyage-context-* models).
+        # Per the official spec the "inputs" field accepts either form of
+        # Union[List[List[str]], List[str]]:
+        #   * List[List[str]] - each element is a document already split into
+        #     its own chunks; one embedding is returned per chunk.
+        #   * List[str] - a flat list of documents, only valid together with
+        #     enable_auto_chunking=True, which lets the service chunk each
+        #     document server-side.
+        # See https://docs.voyageai.com/docs/contextualized-chunk-embeddings
+        #
+        # Each of our inputs is a single stored document that must map to
+        # exactly one output embedding, so we use the List[List[str]] form and
+        # pass every document as a one-chunk document ([[doc], ...]). This
+        # keeps a strict 1:1 correspondence between inputs and embeddings
+        # regardless of document length, which auto-chunking cannot guarantee.
         params: dict[str, Any] = {
             "inputs": [[inp] for inp in inputs],
             "input_type": "document",
