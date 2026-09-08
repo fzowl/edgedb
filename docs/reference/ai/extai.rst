@@ -286,6 +286,7 @@ Example provider configuration:
 
     * ``OpenAI``
     * ``Anthropic``
+    * ``VoyageAI``
 
 
 ---------
@@ -309,6 +310,7 @@ Example provider configuration:
     * ``ext::ai::OpenAIProviderConfig``
     * ``ext::ai::MistralProviderConfig``
     * ``ext::ai::AnthropicProviderConfig``
+    * ``ext::ai::VoyageAIProviderConfig``
     * ``ext::ai::CustomProviderConfig``
 
     Each inherits from :eql:type:`ext::ai::ProviderConfig` with provider-specific defaults.
@@ -344,6 +346,29 @@ OpenAI (`documentation <https://platform.openai.com/docs/guides/embeddings/embed
 Mistral (`documentation <https://docs.mistral.ai/capabilities/embeddings/#mistral-embeddings-api>`__)
 
 * ``mistral-embed``
+
+VoyageAI by MongoDB (`documentation <https://docs.voyageai.com/docs/embeddings>`__)
+
+Current generation models:
+
+* ``voyage-4``
+* ``voyage-4-lite``
+* ``voyage-4-large``
+* ``voyage-code-4``
+* ``voyage-finance-2``
+* ``voyage-law-2``
+* ``voyage-context-4`` (contextualized chunk embeddings)
+
+Legacy models (deprecated):
+
+* ``voyage-3-large`` (use ``voyage-4-large`` instead)
+* ``voyage-3.5`` (use ``voyage-4`` instead)
+* ``voyage-3.5-lite`` (use ``voyage-4-lite`` instead)
+* ``voyage-code-3`` (use ``voyage-code-4`` instead)
+* ``voyage-context-3`` (use ``voyage-context-4`` instead)
+* ``voyage-3`` (use ``voyage-4`` instead)
+* ``voyage-3-lite`` (use ``voyage-4-lite`` instead)
+* ``voyage-code-2`` (use ``voyage-code-4`` instead)
 
 Ollama (`documentation <https://github.com/ollama/ollama/blob/main/docs/api.md#generate-embeddings>`__)
 

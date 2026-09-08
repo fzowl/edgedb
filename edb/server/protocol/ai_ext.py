@@ -111,6 +111,7 @@ class BadRequestError(AIExtError):
 class ApiStyle(s_enum.StrEnum):
     OpenAI = 'OpenAI'
     Anthropic = 'Anthropic'
+    VoyageAI = 'VoyageAI'
     Ollama = 'Ollama'
 
 
@@ -241,6 +242,43 @@ class OllamaTokenizer(Tokenizer):
         return ''.join(chr(c) for c in tokens)
 
 
+class VoyageAITokenizer(Tokenizer):
+
+    """
+    Counts characters as a stand-in for tokens.
+
+    VoyageAI (by MongoDB) publishes real tokenizers on the Hugging Face Hub,
+    but pulling them in would add a heavyweight dependency and a network
+    download at runtime. Since the number of tokens for a given text is always
+    less than or equal to the number of characters, counting characters is a
+    conservative proxy: it never lets a batch exceed the real token budget and
+    never leaves an over-long input un-truncated. It can under-fill batches for
+    text that tokenizes densely, which is the same trade-off OllamaTokenizer
+    makes.
+    """
+
+    _instances: dict[str, VoyageAITokenizer] = {}
+
+    @classmethod
+    def for_model(cls, model_name: str) -> VoyageAITokenizer:
+        if model_name in cls._instances:
+            return cls._instances[model_name]
+
+        tokenizer = VoyageAITokenizer()
+        cls._instances[model_name] = tokenizer
+
+        return tokenizer
+
+    def encode(self, text: str) -> list[int]:
+        return [ord(c) for c in text]
+
+    def encode_padding(self) -> int:
+        return 0
+
+    def decode(self, tokens: list[int]) -> str:
+        return ''.join(chr(c) for c in tokens)
+
+
 class TestTokenizer(Tokenizer):
 
     _instances: dict[str, TestTokenizer] = {}
@@ -276,6 +314,8 @@ def get_model_tokenizer(
         return MistralTokenizer.for_model(model_name)
     if provider_name == 'builtin::ollama':
         return OllamaTokenizer.for_model(model_name)
+    elif provider_name == 'builtin::voyageai':
+        return VoyageAITokenizer.for_model(model_name)
     elif provider_name == 'custom::test':
         return TestTokenizer.for_model(model_name)
     else:
@@ -1267,6 +1307,10 @@ async def _generate_embeddings(
         result = await _generate_openai_embeddings(
             provider, model_name, inputs, shortening, user, http_client
         )
+    elif provider.api_style == ApiStyle.VoyageAI:
+        result = await _generate_voyageai_embeddings(
+            provider, model_name, inputs, shortening, http_client
+        )
     elif provider.api_style == ApiStyle.Ollama:
         result = await _generate_ollama_embeddings(
             provider, model_name, inputs, shortening, http_client
@@ -1333,6 +1377,109 @@ async def _generate_openai_embeddings(
     return EmbeddingsResult(
         data=(error if error else EmbeddingsData(result.bytes())),
         limits=_read_openai_limits(result),
+    )
+
+
+async def _generate_voyageai_embeddings(
+    provider: ProviderConfig,
+    model_name: str,
+    inputs: list[str],
+    shortening: Optional[int],
+    http_client: http.HttpClient,
+) -> EmbeddingsResult:
+
+    headers = {
+        "Authorization": f"Bearer {provider.secret}",
+    }
+    client = http_client.with_context(
+        headers=headers,
+        base_url=provider.api_url,
+    )
+
+    # Contextualized-embedding models are the voyage-context-* family and use
+    # a different endpoint/payload shape. Match the documented name prefix
+    # rather than a loose substring so unrelated future models are not caught.
+    is_contextualized = model_name.startswith("voyage-context")
+
+    if is_contextualized:
+        # Contextualized chunk embeddings API (voyage-context-* models).
+        # Per the official spec the "inputs" field accepts either form of
+        # Union[List[List[str]], List[str]]:
+        #   * List[List[str]] - each element is a document already split into
+        #     its own chunks; one embedding is returned per chunk.
+        #   * List[str] - a flat list of documents, only valid together with
+        #     enable_auto_chunking=True, which lets the service chunk each
+        #     document server-side.
+        # See https://docs.voyageai.com/docs/contextualized-chunk-embeddings
+        #
+        # Each of our inputs is a single stored document that must map to
+        # exactly one output embedding, so we use the List[List[str]] form and
+        # pass every document as a one-chunk document ([[doc], ...]). This
+        # keeps a strict 1:1 correspondence between inputs and embeddings
+        # regardless of document length, which auto-chunking cannot guarantee.
+        params: dict[str, Any] = {
+            "inputs": [[inp] for inp in inputs],
+            "input_type": "document",
+            "model": model_name,
+        }
+        endpoint = "/contextualizedembeddings"
+    else:
+        # Standard embeddings. input_type="document" is what VoyageAI (by
+        # MongoDB) recommends for the indexing side of retrieval; it matches
+        # the contextualized path above and improves retrieval quality.
+        params = {
+            "input": inputs,
+            "input_type": "document",
+            "model": model_name,
+        }
+        endpoint = "/embeddings"
+
+    # Add output_dimension parameter if shortening is specified
+    if shortening is not None:
+        params["output_dimension"] = shortening
+
+    result = await client.post(
+        endpoint,
+        json=params,
+    )
+
+    error = None
+    if result.status_code >= 400:
+        error = rs.Error(
+            message=(
+                f"API call to generate embeddings failed with status "
+                f"{result.status_code}: {result.text}"
+            ),
+            retry=(
+                # If the request fails with 429 - too many requests, it can be
+                # retried
+                result.status_code == 429
+            ),
+        )
+
+    # Voyage exposes the same x-ratelimit-* headers as OpenAI, so the shared
+    # reader lets the scheduler do rate-limit-aware backoff; it degrades to
+    # None values when the headers are absent.
+    limits = _read_openai_limits(result)
+
+    # For contextualized embeddings, we need to flatten the response
+    if is_contextualized and not error:
+        response_data = json.loads(result.bytes())
+        # Flatten the nested structure: data[doc][chunk] -> data[chunk]
+        flattened_data = []
+        for doc in response_data.get("data", []):
+            for chunk in doc.get("data", []):
+                flattened_data.append(chunk)
+        response_data["data"] = flattened_data
+        flattened_bytes = json.dumps(response_data).encode()
+        return EmbeddingsResult(
+            data=EmbeddingsData(flattened_bytes),
+            limits=limits,
+        )
+
+    return EmbeddingsResult(
+        data=(error if error else EmbeddingsData(result.bytes())),
+        limits=limits,
     )
 
 

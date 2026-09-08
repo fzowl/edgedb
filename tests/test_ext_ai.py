@@ -1474,3 +1474,224 @@ class TestExtAIUtils(unittest.TestCase):
                 ([4, 1], 6),
             ],
         )
+
+
+class _FakeHttpResponse:
+    def __init__(self, status_code, payload, headers=None):
+        self.status_code = status_code
+        self._payload = payload
+        self.headers = headers or {}
+
+    @property
+    def text(self):
+        return self._payload
+
+    def bytes(self):
+        return self._payload.encode()
+
+
+class _FakeHttpClient:
+    # Minimal stand-in for http.HttpClient that records the request the
+    # provider dispatch builds and returns a canned response.
+    def __init__(self, responder):
+        self._responder = responder
+        self.headers = None
+        self.base_url = None
+        self.calls = []
+
+    def with_context(self, *, headers, base_url):
+        self.headers = headers
+        self.base_url = base_url
+        return self
+
+    async def post(self, endpoint, *, json):
+        self.calls.append((endpoint, json))
+        return self._responder(endpoint, json)
+
+
+class TestExtAIVoyage(unittest.IsolatedAsyncioTestCase):
+    # Mock-backed coverage for the VoyageAI provider dispatch: exercises both
+    # the standard and voyage-context-* code paths through
+    # ai_ext._generate_embeddings without needing a live server.
+
+    def _provider(self):
+        return ai_ext.ProviderConfig(
+            name='builtin::voyageai',
+            display_name='VoyageAI by MongoDB',
+            api_url='https://example.invalid/v1',
+            client_id='',
+            secret='sk-test',
+            api_style=ai_ext.ApiStyle.VoyageAI,
+        )
+
+    async def test_ext_ai_voyage_standard_path(self):
+        provider = self._provider()
+
+        def responder(endpoint, params):
+            return _FakeHttpResponse(
+                200,
+                json.dumps({
+                    "object": "list",
+                    "data": [
+                        {"object": "embedding", "index": 0,
+                         "embedding": [0.1, 0.2]},
+                        {"object": "embedding", "index": 1,
+                         "embedding": [0.3, 0.4]},
+                    ],
+                }),
+                headers={
+                    'x-ratelimit-limit-requests': '100',
+                    'x-ratelimit-remaining-requests': '99',
+                },
+            )
+
+        client = _FakeHttpClient(responder)
+        result = await ai_ext._generate_embeddings(
+            provider, 'voyage-4', ['hello', 'world'], None, None, client,
+        )
+
+        # Regression guard: the dispatch must attach provider_cfg so that
+        # EmbeddingsResult.finalize() does not raise AttributeError.
+        self.assertIs(result.provider_cfg, provider)
+
+        endpoint, params = client.calls[0]
+        self.assertEqual(endpoint, '/embeddings')
+        self.assertEqual(
+            params,
+            {
+                'input': ['hello', 'world'],
+                'input_type': 'document',
+                'model': 'voyage-4',
+            },
+        )
+
+        self.assertEqual(
+            provider.get_embeddings_from_result(result.data.embeddings),
+            [[0.1, 0.2], [0.3, 0.4]],
+        )
+
+        # Rate-limit headers are surfaced for the scheduler.
+        self.assertEqual(result.limits['requests'].total, 100)
+        self.assertEqual(result.limits['requests'].remaining, 99)
+
+    async def test_ext_ai_voyage_contextualized_path(self):
+        provider = self._provider()
+
+        def responder(endpoint, params):
+            # Contextualized endpoint returns one entry per document, each
+            # carrying its own list of chunk embeddings.
+            return _FakeHttpResponse(
+                200,
+                json.dumps({
+                    "object": "list",
+                    "data": [
+                        {"object": "document", "index": 0, "data": [
+                            {"object": "embedding", "index": 0,
+                             "embedding": [1.0, 2.0]},
+                        ]},
+                        {"object": "document", "index": 1, "data": [
+                            {"object": "embedding", "index": 0,
+                             "embedding": [3.0, 4.0]},
+                        ]},
+                    ],
+                }),
+            )
+
+        client = _FakeHttpClient(responder)
+        result = await ai_ext._generate_embeddings(
+            provider, 'voyage-context-4', ['doc a', 'doc b'], None, None,
+            client,
+        )
+
+        self.assertIs(result.provider_cfg, provider)
+
+        endpoint, params = client.calls[0]
+        self.assertEqual(endpoint, '/contextualizedembeddings')
+        # Each document is sent as its own one-chunk document to keep a
+        # strict 1:1 input-to-embedding mapping.
+        self.assertEqual(params['inputs'], [['doc a'], ['doc b']])
+        self.assertEqual(params['input_type'], 'document')
+        self.assertEqual(params['model'], 'voyage-context-4')
+
+        # The nested data[doc][chunk] response is flattened to data[chunk] so
+        # the shared extractor sees the same shape as the standard endpoint.
+        self.assertEqual(
+            provider.get_embeddings_from_result(result.data.embeddings),
+            [[1.0, 2.0], [3.0, 4.0]],
+        )
+
+    async def test_ext_ai_voyage_shortening_and_error(self):
+        provider = self._provider()
+
+        # output_dimension is forwarded when shortening is requested.
+        def ok_responder(endpoint, params):
+            return _FakeHttpResponse(
+                200,
+                json.dumps({"object": "list", "data": [
+                    {"object": "embedding", "index": 0, "embedding": [1.0]},
+                ]}),
+            )
+
+        client = _FakeHttpClient(ok_responder)
+        await ai_ext._generate_embeddings(
+            provider, 'voyage-4', ['hi'], 256, None, client,
+        )
+        self.assertEqual(client.calls[0][1]['output_dimension'], 256)
+
+        # A 429 is reported as a retryable error rather than raising.
+        def err_responder(endpoint, params):
+            return _FakeHttpResponse(429, 'rate limited')
+
+        client = _FakeHttpClient(err_responder)
+        result = await ai_ext._generate_embeddings(
+            provider, 'voyage-4', ['hi'], None, None, client,
+        )
+        self.assertIs(result.provider_cfg, provider)
+        self.assertIsInstance(result.data, ai_ext.rs.Error)
+        self.assertTrue(result.data.retry)
+
+    def test_ext_ai_voyage_tokenizer_registered(self):
+        # Without a tokenizer, batch_texts sends every pending row in a single
+        # request with no per-input length enforcement. The VoyageAI provider
+        # must resolve to VoyageAITokenizer so lengths and batches are honored.
+        tokenizer = ai_ext.get_model_tokenizer(
+            'builtin::voyageai', 'voyage-4'
+        )
+        self.assertIsInstance(tokenizer, ai_ext.VoyageAITokenizer)
+
+    def test_ext_ai_voyage_batching_and_truncation(self):
+        tokenizer = ai_ext.get_model_tokenizer(
+            'builtin::voyageai', 'voyage-4'
+        )
+
+        texts = [
+            ('aa', True),        # 0: fits
+            ('bb', True),        # 1: fits
+            ('cc', True),        # 2: fits
+            ('abcdefgh', True),  # 3: over max_input_tokens, truncatable
+            ('longlong', False),  # 4: over max_input_tokens, not truncatable
+        ]
+
+        batches, excluded = ai_ext.batch_texts(
+            texts,
+            tokenizer,
+            # VoyageAITokenizer counts characters, so token == character here.
+            max_input_tokens=5,
+            max_batch_tokens=1000,
+            max_batch_size=2,
+        )
+
+        # The un-truncatable over-long input is dropped from embedding.
+        self.assertEqual(excluded, [4])
+
+        # Remaining 4 inputs are split into batches of at most max_batch_size.
+        self.assertTrue(all(len(b.entries) <= 2 for b in batches))
+        self.assertEqual(sum(len(b.entries) for b in batches), 4)
+
+        # The over-long truncatable input is truncated to max_input_tokens.
+        by_index = {
+            entry.input_index: entry.input_text
+            for b in batches for entry in b.entries
+        }
+        self.assertEqual(by_index[3], 'abcde')
+        self.assertNotIn(4, by_index)
