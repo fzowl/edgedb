@@ -1361,11 +1361,17 @@ async def _generate_voyageai_embeddings(
     is_contextualized = "context" in model_name
 
     if is_contextualized:
-        # For contextualized embeddings, treat each input as a single-chunk document
+        # For contextualized embeddings, pass the full-document strings as a
+        # flat list[str] and let VoyageAI auto-chunk them. Auto-chunking
+        # requires input_type="document"; chunk_size must not exceed 32K
+        # tokens, which also matches the per-chunk context window of the
+        # voyage-context models so each input yields a single chunk.
         params: dict[str, Any] = {
-            "inputs": [[inp] for inp in inputs],
+            "inputs": inputs,
             "input_type": "document",
             "model": model_name,
+            "enable_auto_chunking": True,
+            "chunk_size": 32000,
         }
         endpoint = "/contextualizedembeddings"
     else:
