@@ -19,8 +19,8 @@ AI
 practically no effort.
 
 1. ``ext::ai``: this Gel extension automatically generates embeddings for your
-   data. Works with OpenAI, Mistral AI, Anthropic, and any other provider with a
-   compatible API.
+   data. Works with OpenAI, Mistral AI, Anthropic, Voyage AI by MongoDB, and
+   any other provider with a compatible API.
 
 2. Python library: ``gel.ai``. Access all Gel AI features straight from your
    Python application.

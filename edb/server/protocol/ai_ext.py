@@ -111,7 +111,13 @@ class BadRequestError(AIExtError):
 class ApiStyle(s_enum.StrEnum):
     OpenAI = 'OpenAI'
     Anthropic = 'Anthropic'
+    VoyageAI = 'VoyageAI'
     Ollama = 'Ollama'
+
+
+# What the embeddings are for: `document` for text that is stored and
+# searched, `query` for the search text. Only Voyage AI by MongoDB uses it.
+EmbeddingsInputType = Literal['document', 'query']
 
 
 class Tokenizer(abc.ABC):
@@ -241,6 +247,41 @@ class OllamaTokenizer(Tokenizer):
         return ''.join(chr(c) for c in tokens)
 
 
+class VoyageAITokenizer(Tokenizer):
+
+    """
+    Counts characters as a stand-in for tokens.
+
+    Voyage AI by MongoDB tokenizes with its own tokenizers, which are not
+    available here without an extra dependency. A character count is a
+    proxy in the same way as it is for OllamaTokenizer: it lets
+    `batch_texts` enforce the input length limits and split requests by the
+    batch limits. It is an approximation, so for text that tokenizes into
+    more tokens than characters a request can still exceed a limit and fail.
+    """
+
+    _instances: dict[str, VoyageAITokenizer] = {}
+
+    @classmethod
+    def for_model(cls, model_name: str) -> VoyageAITokenizer:
+        if model_name in cls._instances:
+            return cls._instances[model_name]
+
+        tokenizer = VoyageAITokenizer()
+        cls._instances[model_name] = tokenizer
+
+        return tokenizer
+
+    def encode(self, text: str) -> list[int]:
+        return [ord(c) for c in text]
+
+    def encode_padding(self) -> int:
+        return 0
+
+    def decode(self, tokens: list[int]) -> str:
+        return ''.join(chr(c) for c in tokens)
+
+
 class TestTokenizer(Tokenizer):
 
     _instances: dict[str, TestTokenizer] = {}
@@ -276,6 +317,8 @@ def get_model_tokenizer(
         return MistralTokenizer.for_model(model_name)
     if provider_name == 'builtin::ollama':
         return OllamaTokenizer.for_model(model_name)
+    elif provider_name == 'builtin::voyageai':
+        return VoyageAITokenizer.for_model(model_name)
     elif provider_name == 'custom::test':
         return TestTokenizer.for_model(model_name)
     else:
@@ -745,6 +788,7 @@ class EmbeddingsRequest(rs.Request[EmbeddingsData]):
                 self.params.shortening,
                 self.params.user,
                 self.params.http_client,
+                input_type='document',
             )
             result.pgconn = self.params.pgconn
             result.pending_entries = [
@@ -1254,6 +1298,8 @@ async def _generate_embeddings(
     shortening: Optional[int],
     user: Optional[str],
     http_client: http.HttpClient,
+    *,
+    input_type: Optional[EmbeddingsInputType],
 ) -> EmbeddingsResult:
     task_name = _task_name.get()
     count = len(inputs)
@@ -1266,6 +1312,10 @@ async def _generate_embeddings(
     if provider.api_style == ApiStyle.OpenAI:
         result = await _generate_openai_embeddings(
             provider, model_name, inputs, shortening, user, http_client
+        )
+    elif provider.api_style == ApiStyle.VoyageAI:
+        result = await _generate_voyageai_embeddings(
+            provider, model_name, inputs, shortening, input_type, http_client
         )
     elif provider.api_style == ApiStyle.Ollama:
         result = await _generate_ollama_embeddings(
@@ -1333,6 +1383,140 @@ async def _generate_openai_embeddings(
     return EmbeddingsResult(
         data=(error if error else EmbeddingsData(result.bytes())),
         limits=_read_openai_limits(result),
+    )
+
+
+VOYAGEAI_DEFAULT_API_URL = 'https://api.voyageai.com/v1'
+VOYAGEAI_MONGODB_API_URL = 'https://ai.mongodb.com/v1'
+
+# The `chunk_size` of contextualized embeddings with auto-chunking, in tokens.
+# It is the largest the API allows and the same as the context length of the
+# models, so a document within the model's input limit is one chunk.
+VOYAGEAI_CONTEXT_CHUNK_SIZE = 32_000
+
+
+def _get_voyageai_base_url(provider: ProviderConfig) -> str:
+    """Get the API URL to use for a Voyage AI by MongoDB provider.
+
+    An API key with the `al-` prefix is for the MongoDB host, so for such a
+    key the default API URL is replaced with it. An API URL that was set
+    explicitly is always used as it is.
+    """
+    if (
+        provider.api_url == VOYAGEAI_DEFAULT_API_URL
+        and provider.secret.startswith('al-')
+    ):
+        return VOYAGEAI_MONGODB_API_URL
+    return provider.api_url
+
+
+def _get_voyageai_error_message(result: Any) -> str:
+    """Get the text of a Voyage error, `{"detail": "<text>"}`, if it has one."""
+    try:
+        detail = json.loads(result.text).get('detail')
+    except (ValueError, AttributeError):
+        detail = None
+    return detail if isinstance(detail, str) else str(result.text)
+
+
+async def _generate_voyageai_embeddings(
+    provider: ProviderConfig,
+    model_name: str,
+    inputs: list[str],
+    shortening: Optional[int],
+    input_type: Optional[EmbeddingsInputType],
+    http_client: http.HttpClient,
+) -> EmbeddingsResult:
+
+    headers = {
+        "Authorization": f"Bearer {provider.secret}",
+    }
+    client = http_client.with_context(
+        headers=headers,
+        base_url=_get_voyageai_base_url(provider),
+    )
+
+    # The voyage-context-* models are the contextualized embeddings models.
+    # They have an endpoint of their own.
+    is_contextualized = model_name.startswith("voyage-context")
+
+    params: dict[str, Any]
+    if is_contextualized:
+        endpoint = "/contextualizedembeddings"
+        params = {"model": model_name}
+        if input_type == 'document':
+            # Auto-chunking works only for documents and takes a flat list
+            # with one string per document.
+            params["inputs"] = inputs
+            params["input_type"] = input_type
+            params["enable_auto_chunking"] = True
+            params["chunk_size"] = VOYAGEAI_CONTEXT_CHUNK_SIZE
+        else:
+            # Queries are not chunked. Each one is a list of its own.
+            params["inputs"] = [[inp] for inp in inputs]
+            if input_type is not None:
+                params["input_type"] = input_type
+    else:
+        endpoint = "/embeddings"
+        params = {
+            "input": inputs,
+            "model": model_name,
+            # The inputs are already limited to the model's input size.
+            # Do not let the API truncate them silently.
+            "truncation": False,
+        }
+        if input_type is not None:
+            params["input_type"] = input_type
+
+    if shortening is not None:
+        params["output_dimension"] = shortening
+
+    result = await client.post(
+        endpoint,
+        json=params,
+    )
+
+    if result.status_code >= 400:
+        return EmbeddingsResult(
+            data=rs.Error(
+                message=(
+                    f"API call to generate embeddings failed with status "
+                    f"{result.status_code}: "
+                    f"{_get_voyageai_error_message(result)}"
+                ),
+                retry=(
+                    # If the request fails with 429 - too many requests, it
+                    # can be retried
+                    result.status_code == 429
+                ),
+            ),
+        )
+
+    if not is_contextualized:
+        return EmbeddingsResult(data=EmbeddingsData(result.bytes()))
+
+    # The contextualized endpoint returns the embeddings of the chunks of
+    # each document: data[document].data[chunk]. An input is one embedding
+    # here, so each document must be a single chunk.
+    response_data = json.loads(result.bytes())
+    flattened_data = []
+    for document in sorted(response_data["data"], key=lambda d: d["index"]):
+        chunks = document["data"]
+        if len(chunks) != 1:
+            return EmbeddingsResult(
+                data=rs.Error(
+                    message=(
+                        f"API call to generate embeddings returned "
+                        f"{len(chunks)} chunks for the input "
+                        f"{document['index']}, expected 1"
+                    ),
+                    retry=False,
+                ),
+            )
+        flattened_data.append(chunks[0])
+    response_data["data"] = flattened_data
+    return EmbeddingsResult(
+        data=EmbeddingsData(json.dumps(response_data).encode()),
     )
 
 
@@ -3004,6 +3188,8 @@ async def _handle_embeddings_request(
         shortening,
         user,
         http_client=tenant.get_http_client(originator="ai/embeddings"),
+        # The request does not say what the inputs are for.
+        input_type=None,
     )
     if isinstance(result.data, rs.Error):
         raise AIProviderError(result.data.message)
@@ -3378,6 +3564,7 @@ async def generate_embeddings_for_text(
         shortening,
         None,
         http_client,
+        input_type='query',
     )
     if isinstance(result.data, rs.Error):
         raise AIProviderError(result.data.message)
@@ -3549,6 +3736,7 @@ async def generate_embeddings_for_texts(
                 shortening,
                 None,
                 http_client,
+                input_type='query',
             )
             if isinstance(embeddings_result.data, rs.Error):
                 raise AIProviderError(embeddings_result.data.message)
