@@ -350,7 +350,8 @@ Mistral (`documentation <https://docs.mistral.ai/capabilities/embeddings/#mistra
 Voyage AI by MongoDB (`documentation <https://docs.voyageai.com/docs/embeddings>`__)
 
 The embeddings have 1024 dimensions. The models that support it can return
-fewer, down to 256, when the index sets ``dimensions``.
+256 or 512 dimensions when the index sets ``dimensions`` to that value. Voyage
+rejects other values.
 
 Current models:
 

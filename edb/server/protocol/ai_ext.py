@@ -1513,7 +1513,9 @@ async def _generate_voyageai_embeddings(
                     retry=False,
                 ),
             )
-        flattened_data.append(chunks[0])
+        # The index of a chunk is its place in its document, but here it is
+        # the place of the input.
+        flattened_data.append({**chunks[0], "index": document["index"]})
     response_data["data"] = flattened_data
     return EmbeddingsResult(
         data=EmbeddingsData(json.dumps(response_data).encode()),

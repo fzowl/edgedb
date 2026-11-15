@@ -1569,6 +1569,10 @@ class TestExtAIVoyage(unittest.IsolatedAsyncioTestCase):
             ),
             [[0.0, 0.0], [1.0, 0.0]],
         )
+        self.assertEqual(
+            [e['index'] for e in json.loads(result.data.embeddings)['data']],
+            [0, 1],
+        )
 
     async def test_ext_ai_voyage_contextualized_query(self):
         # The API answers 400 to auto-chunking without `document` input type.
