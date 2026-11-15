@@ -18,6 +18,7 @@
 
 import json
 import pathlib
+import re
 import textwrap
 import unittest
 
@@ -1474,3 +1475,255 @@ class TestExtAIUtils(unittest.TestCase):
                 ([4, 1], 6),
             ],
         )
+
+
+class _FakeHttpResponse:
+    def __init__(self, status_code, payload):
+        self.status_code = status_code
+        self._payload = payload
+
+    @property
+    def text(self):
+        return self._payload
+
+    def bytes(self):
+        return self._payload.encode()
+
+
+class _FakeHttpClient:
+    # Records the request a provider sends and returns a canned response.
+    def __init__(self, response):
+        self._response = response
+        self.base_url = None
+        self.calls = []
+
+    def with_context(self, *, headers, base_url):
+        self.base_url = base_url
+        return self
+
+    async def post(self, endpoint, *, json):
+        self.calls.append((endpoint, json))
+        return self._response
+
+
+class TestExtAIVoyage(unittest.IsolatedAsyncioTestCase):
+
+    DEFAULT_URL = 'https://api.voyageai.com/v1'
+
+    def _provider(self, *, secret='pa-test', api_url=DEFAULT_URL):
+        return ai_ext.ProviderConfig(
+            name='builtin::voyageai',
+            display_name='Voyage AI by MongoDB',
+            api_url=api_url,
+            client_id='',
+            secret=secret,
+            api_style=ai_ext.ApiStyle.VoyageAI,
+        )
+
+    def _contextualized_response(self, chunks_per_document):
+        return _FakeHttpResponse(200, json.dumps({
+            "object": "list",
+            "data": [
+                {
+                    "object": "list",
+                    "index": doc_index,
+                    "data": [
+                        {
+                            "object": "embedding",
+                            "index": chunk_index,
+                            "embedding": [float(doc_index), float(chunk_index)],
+                            "text": "chunk",
+                        }
+                        for chunk_index in range(chunks)
+                    ],
+                }
+                for doc_index, chunks in enumerate(chunks_per_document)
+            ],
+        }))
+
+    async def _embed(self, provider, model, inputs, client, **kwargs):
+        kwargs.setdefault('input_type', 'document')
+        return await ai_ext._generate_embeddings(
+            provider, model, inputs, kwargs.pop('shortening', None), None,
+            client, **kwargs,
+        )
+
+    async def test_ext_ai_voyage_contextualized_document(self):
+        # The API answers 400 to auto-chunking with nested inputs, so a
+        # document is a flat string.
+        client = _FakeHttpClient(self._contextualized_response([1, 1]))
+        result = await self._embed(
+            self._provider(), 'voyage-context-4', ['doc a', 'doc b'], client,
+        )
+
+        endpoint, params = client.calls[0]
+        self.assertEqual(endpoint, '/contextualizedembeddings')
+        self.assertEqual(params['inputs'], ['doc a', 'doc b'])
+        self.assertEqual(params['input_type'], 'document')
+        self.assertIs(params['enable_auto_chunking'], True)
+        self.assertEqual(params['chunk_size'], 32_000)
+        self.assertNotIn('truncation', params)
+        self.assertEqual(
+            result.provider_cfg.get_embeddings_from_result(
+                result.data.embeddings
+            ),
+            [[0.0, 0.0], [1.0, 0.0]],
+        )
+
+    async def test_ext_ai_voyage_contextualized_query(self):
+        # The API answers 400 to auto-chunking without `document` input type.
+        client = _FakeHttpClient(self._contextualized_response([1]))
+        await self._embed(
+            self._provider(), 'voyage-context-4', ['what is it'], client,
+            input_type='query',
+        )
+
+        _, params = client.calls[0]
+        self.assertEqual(params['inputs'], [['what is it']])
+        self.assertEqual(params['input_type'], 'query')
+        self.assertNotIn('enable_auto_chunking', params)
+        self.assertNotIn('chunk_size', params)
+
+    async def test_ext_ai_voyage_contextualized_many_chunks(self):
+        # An input is one embedding, so a split document must not be
+        # flattened into the embeddings of the inputs after it.
+        client = _FakeHttpClient(self._contextualized_response([2, 1]))
+        result = await self._embed(
+            self._provider(), 'voyage-context-4', ['long', 'short'], client,
+        )
+
+        self.assertIsInstance(result.data, ai_ext.rs.Error)
+        self.assertFalse(result.data.retry)
+        self.assertIn('2 chunks', result.data.message)
+
+    async def test_ext_ai_voyage_embeddings_request(self):
+        client = _FakeHttpClient(_FakeHttpResponse(200, json.dumps({
+            "object": "list",
+            "data": [{"object": "embedding", "index": 0, "embedding": [1.0]}],
+        })))
+        await self._embed(
+            self._provider(), 'voyage-4', ['hi'], client,
+            shortening=256, input_type=None,
+        )
+
+        endpoint, params = client.calls[0]
+        self.assertEqual(endpoint, '/embeddings')
+        self.assertEqual(
+            params,
+            {
+                'input': ['hi'],
+                'model': 'voyage-4',
+                'truncation': False,
+                'output_dimension': 256,
+            },
+        )
+
+    async def test_ext_ai_voyage_error(self):
+        client = _FakeHttpClient(_FakeHttpResponse(
+            400, json.dumps({"detail": "Model nope is not supported."}),
+        ))
+        result = await self._embed(
+            self._provider(), 'nope', ['hi'], client,
+        )
+        self.assertEqual(result.provider_cfg.name, 'builtin::voyageai')
+        self.assertEqual(
+            result.data.message,
+            'API call to generate embeddings failed with status 400: '
+            'Model nope is not supported.',
+        )
+        self.assertFalse(result.data.retry)
+
+        # A body that is not a Voyage error is reported as it is.
+        client = _FakeHttpClient(_FakeHttpResponse(429, 'slow down'))
+        result = await self._embed(
+            self._provider(), 'voyage-4', ['hi'], client,
+        )
+        self.assertTrue(result.data.retry)
+        self.assertTrue(result.data.message.endswith('429: slow down'))
+
+    async def test_ext_ai_voyage_api_url(self):
+        ok = _FakeHttpResponse(200, json.dumps({"data": []}))
+        cases = [
+            # `al-` keys use the MongoDB host by default.
+            ('al-key', self.DEFAULT_URL, 'https://ai.mongodb.com/v1'),
+            ('pa-key', self.DEFAULT_URL, self.DEFAULT_URL),
+            # An explicit API URL always wins.
+            ('al-key', 'https://proxy.test/v1', 'https://proxy.test/v1'),
+        ]
+        for secret, api_url, expected in cases:
+            with self.subTest(secret=secret, api_url=api_url):
+                client = _FakeHttpClient(ok)
+                await self._embed(
+                    self._provider(secret=secret, api_url=api_url),
+                    'voyage-4', ['hi'], client,
+                )
+                self.assertEqual(client.base_url, expected)
+
+    def test_ext_ai_voyage_batching(self):
+        tokenizer = ai_ext.get_model_tokenizer(
+            'builtin::voyageai', 'voyage-4'
+        )
+        self.assertIsInstance(tokenizer, ai_ext.VoyageAITokenizer)
+
+        texts = [
+            ('aa', True),
+            ('bb', True),
+            ('cc', True),
+            ('abcdefgh', True),   # too long, truncated
+            ('longlong', False),  # too long, excluded
+        ]
+        batches, excluded = ai_ext.batch_texts(
+            texts,
+            tokenizer,
+            max_input_tokens=5,
+            max_batch_tokens=1000,
+            max_batch_size=2,
+        )
+
+        self.assertEqual(excluded, [4])
+        by_index = {
+            entry.input_index: entry.input_text
+            for batch in batches for entry in batch.entries
+        }
+        self.assertEqual(
+            by_index, {0: 'aa', 1: 'bb', 2: 'cc', 3: 'abcde'}
+        )
+        self.assertTrue(all(len(batch.entries) <= 2 for batch in batches))
+
+        # The token limit of a request splits the batches as well.
+        batches, _ = ai_ext.batch_texts(
+            [('aaaa', False)] * 5,
+            tokenizer,
+            max_input_tokens=5,
+            max_batch_tokens=10,
+            max_batch_size=1000,
+        )
+        self.assertEqual([len(batch.entries) for batch in batches], [2, 2, 1])
+
+    def test_ext_ai_voyage_model_limits(self):
+        # A model whose batch limit is below its input limit would silently
+        # lose the inputs between the two. Dimensions above 1024 would not
+        # match what Voyage returns without `output_dimension`.
+        schema = (
+            pathlib.Path(ai_ext.__file__).parent.parent.parent
+            / 'lib' / 'ext' / 'ai.edgeql'
+        ).read_text()
+        models = re.findall(
+            r'create abstract type ext::ai::Voyage\w+EmbedModel'
+            r'(.*?)\n    \};',
+            schema,
+            flags=re.S,
+        )
+        self.assertGreaterEqual(len(models), 12)
+        for model in models:
+            anns = dict(re.findall(
+                r'ext::ai::(embedding_model_\w+) := "(\w+)"', model
+            ))
+            self.assertGreaterEqual(
+                int(anns['embedding_model_max_batch_tokens']),
+                int(anns['embedding_model_max_input_tokens']),
+            )
+            self.assertEqual(anns['embedding_model_max_batch_size'], '1000')
+            self.assertEqual(
+                anns['embedding_model_max_output_dimensions'], '1024'
+            )
